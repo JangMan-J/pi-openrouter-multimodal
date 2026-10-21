@@ -639,7 +639,7 @@ export default function (pi: ExtensionAPI) {
         throw new Error(`TTS failed: ${result.error}`);
       }
 
-      const ext = result.contentType?.includes("mp3") ? "mp3" : "bin";
+      const ext = /mp3|mpeg/.test(result.contentType ?? "") ? "mp3" : "bin";
       const tmpPath = join(tmpdir(), `pi-tts-${Date.now()}.${ext}`);
       writeFileSync(tmpPath, Buffer.from(result.buffer!));
 
