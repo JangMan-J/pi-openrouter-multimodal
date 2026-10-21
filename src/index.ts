@@ -16,9 +16,9 @@
  * Settings at /web-tools and /web-models.
  */
 
-import { spawn, spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { execFile, spawn, spawnSync } from "node:child_process";
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
@@ -93,6 +93,93 @@ function voicesFor(modelId: string): string[] {
 function pickVoice(modelId: string, saved: string): string {
   const known = knownVoices(modelId);
   return known && !known.includes(saved) ? known[0] : saved;
+}
+
+/** Where /tts and tts_speak keep audio; override with PI_TTS_DIR. */
+const TTS_DIR = process.env.PI_TTS_DIR || join(homedir(), "Music", "pi-tts");
+/** Messages kept in TTS_DIR, each as a .wav and an .mp3. */
+const TTS_KEEP = 10;
+
+/** `2026-10-21_10-12-03_hello-world`: sortable by time, readable in a file manager. */
+function ttsStem(text: string): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  const time = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
+  const slug = text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 40);
+  return slug ? `${time}_${slug}` : time;
+}
+
+/** Delete every message except the newest TTS_KEEP (both of its files). */
+function pruneTtsDir() {
+  const stems = [...new Set(readdirSync(TTS_DIR).map((f) => f.replace(/\.(wav|mp3)$/, "")))].sort();
+  for (const stem of stems.slice(0, -TTS_KEEP)) {
+    for (const ext of ["wav", "mp3"]) rmSync(join(TTS_DIR, `${stem}.${ext}`), { force: true });
+  }
+}
+
+/** Convert with ffmpeg; resolves false if ffmpeg is missing or fails. */
+function transcode(from: string, to: string): Promise<boolean> {
+  const args = ["-hide_banner", "-loglevel", "error", "-y", "-i", from];
+  if (to.endsWith(".mp3")) args.push("-codec:a", "libmp3lame", "-q:a", "2");
+  args.push(to);
+  return new Promise((resolve) => execFile("ffmpeg", args, { timeout: 30000 }, (err) => resolve(!err)));
+}
+
+/** Play without blocking; returns the player used, if any. */
+function playAudio(path: string): string | undefined {
+  for (const [bin, args] of [
+    ["mpv", ["--no-video", "--really-quiet", path]],
+    ["ffplay", ["-nodisp", "-autoexit", "-loglevel", "quiet", path]],
+    ["mpg123", ["-q", path]],
+  ] as const) {
+    // spawn() reports a missing binary asynchronously, so probe first.
+    if (spawnSync(bin, ["--version"], { stdio: "ignore", timeout: 3000 }).status !== 0) continue;
+    const child = spawn(bin, [...args], { detached: true, stdio: "ignore" });
+    child.on("error", () => {});
+    child.unref();
+    return bin;
+  }
+  return undefined;
+}
+
+/**
+ * Synthesize `text`, save it to TTS_DIR as .wav and .mp3, optionally play it, and prune old messages.
+ * Throws on failure.
+ */
+async function speak(
+  ctx: ExtensionContext,
+  state: ExtensionState,
+  text: string,
+  opts: { model?: string; voice?: string; play: boolean; signal?: AbortSignal },
+): Promise<{ path: string; paths: string[]; model: string; voice: string; size: number; player?: string }> {
+  const apiKey = await resolveApiKey(ctx);
+  if (!apiKey) throw new Error("No OpenRouter API key found.");
+
+  const model = opts.model || state.ttsModel;
+  const voice = opts.voice || pickVoice(model, state.ttsVoice);
+
+  const result = await speakText(apiKey, text, model, voice, opts.signal);
+  if (!result.ok) throw new Error(`TTS failed: ${result.error}`);
+
+  mkdirSync(TTS_DIR, { recursive: true });
+  const base = join(TTS_DIR, ttsStem(text));
+  const type = result.contentType ?? "";
+  const ext = /wav/.test(type) ? "wav" : /mp3|mpeg/.test(type) ? "mp3" : "bin";
+  const path = `${base}.${ext}`;
+  writeFileSync(path, Buffer.from(result.buffer!));
+
+  const player = opts.play ? playAudio(path) : undefined;
+
+  const paths = [path];
+  const other = ext === "wav" ? `${base}.mp3` : ext === "mp3" ? `${base}.wav` : undefined;
+  if (other && (await transcode(path, other))) paths.push(other);
+  pruneTtsDir();
+
+  return { path, paths, model, voice, size: result.buffer!.byteLength, player };
 }
 
 function labelToModelId(label: string, options: ModelOption[]): string {
@@ -603,7 +690,7 @@ export default function (pi: ExtensionAPI) {
     label: "TTS Speak",
     description:
       "Convert text to speech via OpenRouter's /audio/speech endpoint. " +
-      "Returns an MP3 audio file saved to a temp location. " +
+      "Saves WAV and MP3 copies to ~/Music/pi-tts (newest 10 kept) and plays them if autoplay is on. " +
       "Use /web-models to select TTS model and voice.",
     promptGuidelines: ["Use tts_speak when the user asks to speak text aloud or convert text to audio."],
     parameters: Type.Object({
@@ -613,53 +700,46 @@ export default function (pi: ExtensionAPI) {
     }),
 
     async execute(_id, params, signal, onUpdate, ctx) {
-      const apiKey = await resolveApiKey(ctx);
-      if (!apiKey) {
-        return { content: [{ type: "text", text: "No OpenRouter API key found." }], details: { error: "no_api_key" } };
-      }
-
-      const model = (params.model as string) || state.ttsModel;
-      const voice = (params.voice as string) || pickVoice(model, state.ttsVoice);
       onUpdate?.({ content: [{ type: "text", text: `Speaking: "${params.text.substring(0, 80)}..."` }], details: {} });
-
-      const result = await speakText(apiKey, params.text, model, voice, signal);
-
-      if (!result.ok) {
-        throw new Error(`TTS failed: ${result.error}`);
-      }
-
-      const type = result.contentType ?? "";
-      const ext = /wav/.test(type) ? "wav" : /mp3|mpeg/.test(type) ? "mp3" : "bin";
-      const tmpPath = join(tmpdir(), `pi-tts-${Date.now()}.${ext}`);
-      writeFileSync(tmpPath, Buffer.from(result.buffer!));
-
-      // Play locally without blocking; the saved file remains if no player is installed.
-      let player: string | undefined;
-      if (state.ttsAutoplay) {
-        for (const [bin, args] of [
-          ["mpv", ["--no-video", "--really-quiet", tmpPath]],
-          ["ffplay", ["-nodisp", "-autoexit", "-loglevel", "quiet", tmpPath]],
-          ["mpg123", ["-q", tmpPath]],
-        ] as const) {
-          // spawn() reports a missing binary asynchronously, so probe first.
-          if (spawnSync(bin, ["--version"], { stdio: "ignore", timeout: 3000 }).status !== 0) continue;
-          const child = spawn(bin, [...args], { detached: true, stdio: "ignore" });
-          child.on("error", () => {});
-          child.unref();
-          player = bin;
-          break;
-        }
-      }
-
+      const r = await speak(ctx, state, params.text, {
+        model: params.model as string | undefined,
+        voice: params.voice as string | undefined,
+        play: state.ttsAutoplay,
+        signal,
+      });
       return {
         content: [
           {
             type: "text",
-            text: `TTS audio saved to: ${tmpPath}\nText: "${params.text}"\nModel: ${model}, Voice: ${voice}${player ? `\nAutoplay: ${player}` : ""}`,
+            text: `TTS audio saved to: ${r.paths.join(", ")}\nText: "${params.text}"\nModel: ${r.model}, Voice: ${r.voice}${r.player ? `\nAutoplay: ${r.player}` : ""}`,
           },
         ],
-        details: { model, voice, savedTo: tmpPath, size: result.buffer!.byteLength, autoplay: player ?? false },
+        details: { model: r.model, voice: r.voice, savedTo: r.paths, size: r.size, autoplay: r.player ?? false },
       };
+    },
+  });
+
+  // ── /tts command: speak locally without starting an agent turn ──────────
+
+  pi.registerCommand("tts", {
+    description: "Speak text aloud with the /web-models TTS model and voice (no agent turn)",
+    handler: async (args, ctx) => {
+      const text = args.trim();
+      if (!text) {
+        ctx.ui.notify("Usage: /tts <text>", "warning");
+        return;
+      }
+      try {
+        const r = await speak(ctx, state, text, { play: true });
+        ctx.ui.notify(
+          r.player
+            ? `TTS: ${r.model} / ${r.voice} via ${r.player} → ${r.path}`
+            : `TTS saved to ${r.paths.join(", ")} (no mpv, ffplay, or mpg123 found)`,
+          "info",
+        );
+      } catch (err) {
+        ctx.ui.notify(err instanceof Error ? err.message : String(err), "error");
+      }
     },
   });
 
