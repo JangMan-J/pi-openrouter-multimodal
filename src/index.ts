@@ -16,6 +16,7 @@
  * Settings at /web-tools and /web-models.
  */
 
+import { spawn, spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -248,6 +249,12 @@ export default function (pi: ExtensionAPI) {
         { id: "p-enabled", label: "PDF Read", currentValue: state.pdfEnabled ? "on" : "off", values: ["on", "off"] },
         { id: "t-enabled", label: "TTS (Speak)", currentValue: state.ttsEnabled ? "on" : "off", values: ["on", "off"] },
         {
+          id: "t-autoplay",
+          label: "TTS Autoplay",
+          currentValue: state.ttsAutoplay ? "on" : "off",
+          values: ["on", "off"],
+        },
+        {
           id: "r-enabled",
           label: "STT (Transcribe)",
           currentValue: state.sttEnabled ? "on" : "off",
@@ -271,6 +278,7 @@ export default function (pi: ExtensionAPI) {
         else if (id === "d-enabled") state.videoEnabled = val === "on";
         else if (id === "p-enabled") state.pdfEnabled = val === "on";
         else if (id === "t-enabled") state.ttsEnabled = val === "on";
+        else if (id === "t-autoplay") state.ttsAutoplay = val === "on";
         else if (id === "r-enabled") state.sttEnabled = val === "on";
         else if (id === "compact") state.compactStatus = val === "compact";
         persistState(pi, state);
@@ -639,18 +647,37 @@ export default function (pi: ExtensionAPI) {
         throw new Error(`TTS failed: ${result.error}`);
       }
 
-      const ext = /mp3|mpeg/.test(result.contentType ?? "") ? "mp3" : "bin";
+      const type = result.contentType ?? "";
+      const ext = /wav/.test(type) ? "wav" : /mp3|mpeg/.test(type) ? "mp3" : "bin";
       const tmpPath = join(tmpdir(), `pi-tts-${Date.now()}.${ext}`);
       writeFileSync(tmpPath, Buffer.from(result.buffer!));
+
+      // Play locally without blocking; the saved file remains if no player is installed.
+      let player: string | undefined;
+      if (state.ttsAutoplay) {
+        for (const [bin, args] of [
+          ["mpv", ["--no-video", "--really-quiet", tmpPath]],
+          ["ffplay", ["-nodisp", "-autoexit", "-loglevel", "quiet", tmpPath]],
+          ["mpg123", ["-q", tmpPath]],
+        ] as const) {
+          // spawn() reports a missing binary asynchronously, so probe first.
+          if (spawnSync(bin, ["--version"], { stdio: "ignore", timeout: 3000 }).status !== 0) continue;
+          const child = spawn(bin, [...args], { detached: true, stdio: "ignore" });
+          child.on("error", () => {});
+          child.unref();
+          player = bin;
+          break;
+        }
+      }
 
       return {
         content: [
           {
             type: "text",
-            text: `TTS audio saved to: ${tmpPath}\nText: "${params.text}"\nModel: ${model}, Voice: ${voice}`,
+            text: `TTS audio saved to: ${tmpPath}\nText: "${params.text}"\nModel: ${model}, Voice: ${voice}${player ? `\nAutoplay: ${player}` : ""}`,
           },
         ],
-        details: { model, voice, savedTo: tmpPath, size: result.buffer!.byteLength },
+        details: { model, voice, savedTo: tmpPath, size: result.buffer!.byteLength, autoplay: player ?? false },
       };
     },
   });
