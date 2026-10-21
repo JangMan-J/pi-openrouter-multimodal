@@ -81,9 +81,19 @@ function _modelToSettingValue(m: ModelOption): string {
 }
 
 /** Voices for a TTS model: its API-listed voices, else the OpenAI fallback list. */
-function voicesFor(modelId: string): string[] {
+function knownVoices(modelId: string): string[] | undefined {
   const v = ttsModels.find((m) => m.id === modelId)?.voices;
-  return v?.length ? v : FALLBACK_TTS_VOICES.map((m) => m.id);
+  return v?.length ? v : undefined;
+}
+
+function voicesFor(modelId: string): string[] {
+  return knownVoices(modelId) ?? FALLBACK_TTS_VOICES.map((m) => m.id);
+}
+
+/** Keep the saved voice unless the model's voice list is known and excludes it. */
+function pickVoice(modelId: string, saved: string): string {
+  const known = knownVoices(modelId);
+  return known && !known.includes(saved) ? known[0] : saved;
 }
 
 function labelToModelId(label: string, options: ModelOption[]): string {
@@ -331,7 +341,7 @@ export default function (pi: ExtensionAPI) {
           state.ttsModel = labelToModelId(val, ttsModels);
           // Swap the voice row to the new model's voices; keep the voice if still valid.
           const voices = voicesFor(state.ttsModel);
-          if (!voices.includes(state.ttsVoice)) state.ttsVoice = voices[0];
+          state.ttsVoice = pickVoice(state.ttsModel, state.ttsVoice);
           const voiceItem = items.find((it) => it.id === "t-voice");
           if (voiceItem) {
             voiceItem.values = voices;
@@ -636,9 +646,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       const model = (params.model as string) || state.ttsModel;
-      const modelVoices = voicesFor(model);
-      const voice =
-        (params.voice as string) || (modelVoices.includes(state.ttsVoice) ? state.ttsVoice : modelVoices[0]);
+      const voice = (params.voice as string) || pickVoice(model, state.ttsVoice);
       onUpdate?.({ content: [{ type: "text", text: `Speaking: "${params.text.substring(0, 80)}..."` }], details: {} });
 
       const result = await speakText(apiKey, params.text, model, voice, signal);
