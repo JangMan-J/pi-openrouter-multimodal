@@ -72,12 +72,17 @@ let visionModels: ModelOption[] = [...FALLBACK_VISION_MODELS];
 let videoModels: ModelOption[] = [...FALLBACK_VIDEO_MODELS];
 let pdfModels: ModelOption[] = [...FALLBACK_PDF_MODELS];
 let ttsModels: ModelOption[] = [...FALLBACK_TTS_MODELS];
-const ttsVoices: ModelOption[] = [...FALLBACK_TTS_VOICES];
 let sttModels: ModelOption[] = [...FALLBACK_STT_MODELS];
 
 /** Settings helpers */
 function _modelToSettingValue(m: ModelOption): string {
   return m.id;
+}
+
+/** Voices for a TTS model: its API-listed voices, else the OpenAI fallback list. */
+function voicesFor(modelId: string): string[] {
+  const v = ttsModels.find((m) => m.id === modelId)?.voices;
+  return v?.length ? v : FALLBACK_TTS_VOICES.map((m) => m.id);
 }
 
 function labelToModelId(label: string, options: ModelOption[]): string {
@@ -284,7 +289,7 @@ export default function (pi: ExtensionAPI) {
       const vidValues = videoModels.map((m) => m.label);
       const pdfValues = pdfModels.map((m) => m.label);
       const ttsValues = ttsModels.map((m) => m.label);
-      const voxValues = ttsVoices.map((m) => m.id);
+      const voxValues = voicesFor(state.ttsModel);
       const sttValues = sttModels.map((m) => m.label);
 
       // Current labels for display
@@ -314,8 +319,17 @@ export default function (pi: ExtensionAPI) {
         else if (id === "v-model") state.visionModel = labelToModelId(val, visionModels);
         else if (id === "d-model") state.videoModel = labelToModelId(val, videoModels);
         else if (id === "p-model") state.pdfModel = labelToModelId(val, pdfModels);
-        else if (id === "t-model") state.ttsModel = labelToModelId(val, ttsModels);
-        else if (id === "t-voice") state.ttsVoice = val;
+        else if (id === "t-model") {
+          state.ttsModel = labelToModelId(val, ttsModels);
+          // Swap the voice row to the new model's voices; keep the voice if still valid.
+          const voices = voicesFor(state.ttsModel);
+          if (!voices.includes(state.ttsVoice)) state.ttsVoice = voices[0];
+          const voiceItem = items.find((it) => it.id === "t-voice");
+          if (voiceItem) {
+            voiceItem.values = voices;
+            voiceItem.currentValue = state.ttsVoice;
+          }
+        } else if (id === "t-voice") state.ttsVoice = val;
         else if (id === "r-model") state.sttModel = labelToModelId(val, sttModels);
         persistState(pi, state);
         applyState(ctx);
@@ -614,7 +628,9 @@ export default function (pi: ExtensionAPI) {
       }
 
       const model = (params.model as string) || state.ttsModel;
-      const voice = (params.voice as string) || state.ttsVoice;
+      const modelVoices = voicesFor(model);
+      const voice =
+        (params.voice as string) || (modelVoices.includes(state.ttsVoice) ? state.ttsVoice : modelVoices[0]);
       onUpdate?.({ content: [{ type: "text", text: `Speaking: "${params.text.substring(0, 80)}..."` }], details: {} });
 
       const result = await speakText(apiKey, params.text, model, voice, signal);
