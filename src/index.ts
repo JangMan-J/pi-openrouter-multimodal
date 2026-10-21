@@ -45,7 +45,6 @@ import {
   FALLBACK_VISION_MODELS,
   fetchOpenRouterModels,
   generateImage,
-  isActiveModelOpenRouter,
   persistState,
   resolveApiKey,
   restoreState,
@@ -414,10 +413,9 @@ export default function (pi: ExtensionAPI) {
     description:
       "Search the web for real-time information via OpenRouter. " +
       "Use when you need current events, recent data, facts you're unsure about, " +
-      "or anything that has changed recently. Only functional with OpenRouter models.",
+      "or anything that has changed recently.",
     promptGuidelines: [
       "Use web_search when you need real-time information, current events, or data you're uncertain about.",
-      "Only works with OpenRouter models.",
     ],
     parameters: Type.Object({
       query: Type.String({ description: "Search query string" }),
@@ -437,12 +435,6 @@ export default function (pi: ExtensionAPI) {
     }),
 
     async execute(_id, params, signal, onUpdate, ctx) {
-      if (!isActiveModelOpenRouter(ctx)) {
-        return {
-          content: [{ type: "text", text: "web_search is only available with OpenRouter models." }],
-          details: { error: "wrong_provider" },
-        };
-      }
       const apiKey = await resolveApiKey(ctx);
       if (!apiKey) {
         return { content: [{ type: "text", text: "No OpenRouter API key found." }], details: { error: "no_api_key" } };
@@ -491,10 +483,9 @@ export default function (pi: ExtensionAPI) {
     description:
       "Fetch the content of a specific URL via OpenRouter. " +
       "Use when you need to read a web page, documentation, article, or PDF. " +
-      "Returns the page title and text content. Only functional with OpenRouter models.",
+      "Returns the page title and text content.",
     promptGuidelines: [
       "Use web_fetch to read the content of a specific URL when you need to analyze or summarize a known page.",
-      "Only works with OpenRouter models.",
     ],
     parameters: Type.Object({
       url: Type.String({ description: "URL to fetch content from" }),
@@ -507,12 +498,6 @@ export default function (pi: ExtensionAPI) {
     }),
 
     async execute(_id, params, signal, onUpdate, ctx) {
-      if (!isActiveModelOpenRouter(ctx)) {
-        return {
-          content: [{ type: "text", text: "web_fetch is only available with OpenRouter models." }],
-          details: { error: "wrong_provider" },
-        };
-      }
       const apiKey = await resolveApiKey(ctx);
       if (!apiKey) {
         return { content: [{ type: "text", text: "No OpenRouter API key found." }], details: { error: "no_api_key" } };
@@ -577,12 +562,6 @@ export default function (pi: ExtensionAPI) {
     }),
 
     async execute(_id, params, signal, onUpdate, ctx) {
-      if (!isActiveModelOpenRouter(ctx)) {
-        return {
-          content: [{ type: "text", text: "image_generate is only available with OpenRouter models." }],
-          details: { error: "wrong_provider" },
-        };
-      }
       const apiKey = await resolveApiKey(ctx);
       if (!apiKey) {
         return { content: [{ type: "text", text: "No OpenRouter API key found." }], details: { error: "no_api_key" } };
@@ -634,12 +613,6 @@ export default function (pi: ExtensionAPI) {
     }),
 
     async execute(_id, params, signal, onUpdate, ctx) {
-      if (!isActiveModelOpenRouter(ctx)) {
-        return {
-          content: [{ type: "text", text: "tts_speak is only available with OpenRouter models." }],
-          details: { error: "wrong_provider" },
-        };
-      }
       const apiKey = await resolveApiKey(ctx);
       if (!apiKey) {
         return { content: [{ type: "text", text: "No OpenRouter API key found." }], details: { error: "no_api_key" } };
@@ -712,12 +685,6 @@ export default function (pi: ExtensionAPI) {
     }),
 
     async execute(_id, params, signal, onUpdate, ctx) {
-      if (!isActiveModelOpenRouter(ctx)) {
-        return {
-          content: [{ type: "text", text: "stt_transcribe is only available with OpenRouter models." }],
-          details: { error: "wrong_provider" },
-        };
-      }
       const apiKey = await resolveApiKey(ctx);
       if (!apiKey) {
         return { content: [{ type: "text", text: "No OpenRouter API key found." }], details: { error: "no_api_key" } };
@@ -747,8 +714,7 @@ export default function (pi: ExtensionAPI) {
     description:
       "Analyze an image via OpenRouter vision models. " +
       "Provide an image URL or base64 data and a prompt describing what to analyze. " +
-      "Use /web-models to select the vision model. " +
-      "Only functional with OpenRouter models.",
+      "Use /web-models to select the vision model.",
     promptGuidelines: [
       "Use image_understand when you need to analyze or describe an image.",
       "Provide the image URL and a specific prompt about what to look for.",
@@ -761,12 +727,6 @@ export default function (pi: ExtensionAPI) {
     }),
 
     async execute(_id, params, signal, onUpdate, ctx) {
-      if (!isActiveModelOpenRouter(ctx)) {
-        return {
-          content: [{ type: "text", text: "image_understand is only available with OpenRouter models." }],
-          details: { error: "wrong_provider" },
-        };
-      }
       const apiKey = await resolveApiKey(ctx);
       if (!apiKey) {
         return { content: [{ type: "text", text: "No OpenRouter API key found." }], details: { error: "no_api_key" } };
@@ -798,8 +758,7 @@ export default function (pi: ExtensionAPI) {
     label: "Video Understand",
     description:
       "Analyze a video via OpenRouter. Provide a video URL (YouTube links work with Gemini models). " +
-      "Use /web-models to select the video model. " +
-      "Only functional with OpenRouter models.",
+      "Use /web-models to select the video model.",
     promptGuidelines: [
       "Use video_understand when you need to analyze or summarize video content.",
       "YouTube links are supported with Google Gemini models.",
@@ -815,12 +774,6 @@ export default function (pi: ExtensionAPI) {
     }),
 
     async execute(_id, params, signal, onUpdate, ctx) {
-      if (!isActiveModelOpenRouter(ctx)) {
-        return {
-          content: [{ type: "text", text: "video_understand is only available with OpenRouter models." }],
-          details: { error: "wrong_provider" },
-        };
-      }
       const apiKey = await resolveApiKey(ctx);
       if (!apiKey) {
         return { content: [{ type: "text", text: "No OpenRouter API key found." }], details: { error: "no_api_key" } };
@@ -875,12 +828,6 @@ export default function (pi: ExtensionAPI) {
     }),
 
     async execute(_id, params, signal, onUpdate, ctx) {
-      if (!isActiveModelOpenRouter(ctx)) {
-        return {
-          content: [{ type: "text", text: "pdf_read is only available with OpenRouter models." }],
-          details: { error: "wrong_provider" },
-        };
-      }
       const apiKey = await resolveApiKey(ctx);
       if (!apiKey) {
         return { content: [{ type: "text", text: "No OpenRouter API key found." }], details: { error: "no_api_key" } };
