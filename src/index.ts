@@ -3,8 +3,6 @@
  *
  * Adds OpenRouter multimodal tools to Pi:
  *
- *   web_search      — server-side web search
- *   web_fetch       — server-side URL/content fetching
  *   image_generate  — text-to-image generation via chat completions
  *   tts_speak       — text-to-speech via /audio/speech
  *   stt_transcribe  — speech-to-text via /audio/transcriptions
@@ -21,21 +19,14 @@ import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import {
-  DEFAULT_MAX_BYTES,
-  DEFAULT_MAX_LINES,
-  getSettingsListTheme,
-  truncateHead,
-} from "@earendil-works/pi-coding-agent";
+import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, type SettingItem, SettingsList } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import type { ExtensionState, ModelOption } from "./helpers";
 import {
   callChatMultimodal,
-  callOpenRouterTool,
   DEFAULT_STATE,
   downloadAndEncodeFile,
-  extractResponse,
   FALLBACK_IMAGE_MODELS,
   FALLBACK_PDF_MODELS,
   FALLBACK_STT_MODELS,
@@ -54,10 +45,6 @@ import {
   transcribeAudio,
 } from "./helpers";
 
-const SEARCH_SRV = "openrouter:web_search";
-const FETCH_SRV = "openrouter:web_fetch";
-const SEARCH_TOOL = "web_search";
-const FETCH_TOOL = "web_fetch";
 const IMAGE_TOOL = "image_generate";
 const VISION_TOOL = "image_understand";
 const VIDEO_TOOL = "video_understand";
@@ -251,8 +238,6 @@ export default function (pi: ExtensionAPI) {
   let state: ExtensionState = { ...DEFAULT_STATE };
 
   function applyState(ctx: ExtensionContext) {
-    setToolActive(pi, SEARCH_TOOL, state.searchEnabled);
-    setToolActive(pi, FETCH_TOOL, state.fetchEnabled);
     setToolActive(pi, IMAGE_TOOL, state.imageEnabled);
     setToolActive(pi, VISION_TOOL, state.visionEnabled);
     setToolActive(pi, VIDEO_TOOL, state.videoEnabled);
@@ -306,25 +291,6 @@ export default function (pi: ExtensionAPI) {
     handler: async (_args, ctx) => {
       const items: SettingItem[] = [
         {
-          id: "s-enabled",
-          label: "Web Search",
-          currentValue: state.searchEnabled ? "on" : "off",
-          values: ["on", "off"],
-        },
-        {
-          id: "s-engine",
-          label: "Search Engine",
-          currentValue: state.searchEngine,
-          values: ["auto", "native", "exa", "firecrawl", "parallel"],
-        },
-        { id: "f-enabled", label: "Web Fetch", currentValue: state.fetchEnabled ? "on" : "off", values: ["on", "off"] },
-        {
-          id: "f-engine",
-          label: "Fetch Engine",
-          currentValue: state.fetchEngine,
-          values: ["auto", "native", "exa", "openrouter", "firecrawl", "parallel"],
-        },
-        {
           id: "i-enabled",
           label: "Image Generate",
           currentValue: state.imageEnabled ? "on" : "off",
@@ -365,11 +331,7 @@ export default function (pi: ExtensionAPI) {
       ];
 
       await openSettings(ctx, "OpenRouter Web Tools", items, (id, val) => {
-        if (id === "s-enabled") state.searchEnabled = val === "on";
-        else if (id === "s-engine") state.searchEngine = val;
-        else if (id === "f-enabled") state.fetchEnabled = val === "on";
-        else if (id === "f-engine") state.fetchEngine = val;
-        else if (id === "i-enabled") state.imageEnabled = val === "on";
+        if (id === "i-enabled") state.imageEnabled = val === "on";
         else if (id === "v-enabled") state.visionEnabled = val === "on";
         else if (id === "d-enabled") state.videoEnabled = val === "on";
         else if (id === "p-enabled") state.pdfEnabled = val === "on";
@@ -438,194 +400,6 @@ export default function (pi: ExtensionAPI) {
         persistState(pi, state);
         applyState(ctx);
       });
-    },
-  });
-
-  // ── /web-search ─────────────────────────────────────────────────────────
-
-  pi.registerCommand("web-search", {
-    description: "Toggle web_search tool and configure default search engine",
-    handler: async (_args, ctx) => {
-      const items: SettingItem[] = [
-        {
-          id: "s-enabled",
-          label: "Web Search",
-          currentValue: state.searchEnabled ? "on" : "off",
-          values: ["on", "off"],
-        },
-        {
-          id: "s-engine",
-          label: "Search Engine",
-          currentValue: state.searchEngine,
-          values: ["auto", "native", "exa", "firecrawl", "parallel"],
-        },
-      ];
-      await openSettings(ctx, "OpenRouter Web Search", items, (id, val) => {
-        if (id === "s-enabled") state.searchEnabled = val === "on";
-        else if (id === "s-engine") state.searchEngine = val;
-        persistState(pi, state);
-        applyState(ctx);
-      });
-    },
-  });
-
-  // ── /web-fetch ──────────────────────────────────────────────────────────
-
-  pi.registerCommand("web-fetch", {
-    description: "Toggle web_fetch tool and configure default fetch engine",
-    handler: async (_args, ctx) => {
-      const items: SettingItem[] = [
-        { id: "f-enabled", label: "Web Fetch", currentValue: state.fetchEnabled ? "on" : "off", values: ["on", "off"] },
-        {
-          id: "f-engine",
-          label: "Fetch Engine",
-          currentValue: state.fetchEngine,
-          values: ["auto", "native", "exa", "openrouter", "firecrawl", "parallel"],
-        },
-      ];
-      await openSettings(ctx, "OpenRouter Web Fetch", items, (id, val) => {
-        if (id === "f-enabled") state.fetchEnabled = val === "on";
-        else if (id === "f-engine") state.fetchEngine = val;
-        persistState(pi, state);
-        applyState(ctx);
-      });
-    },
-  });
-
-  // ── web_search tool ─────────────────────────────────────────────────────
-
-  pi.registerTool({
-    name: SEARCH_TOOL,
-    label: "Web Search",
-    description:
-      "Search the web for real-time information via OpenRouter. " +
-      "Use when you need current events, recent data, facts you're unsure about, " +
-      "or anything that has changed recently.",
-    promptGuidelines: [
-      "Use web_search when you need real-time information, current events, or data you're uncertain about.",
-    ],
-    parameters: Type.Object({
-      query: Type.String({ description: "Search query string" }),
-      engine: Type.Optional(
-        Type.String({ description: "Search engine: auto (default), native, exa, firecrawl, parallel" }),
-      ),
-      max_results: Type.Optional(
-        Type.Integer({ minimum: 1, maximum: 25, description: "Max results per call (1-25, default 5)" }),
-      ),
-      search_context_size: Type.Optional(
-        Type.String({ description: "Context per result: low (5K), medium (15K), high (30K)" }),
-      ),
-      allowed_domains: Type.Optional(
-        Type.Array(Type.String(), { description: "Only return results from these domains" }),
-      ),
-      excluded_domains: Type.Optional(Type.Array(Type.String(), { description: "Exclude results from these domains" })),
-    }),
-
-    async execute(_id, params, signal, onUpdate, ctx) {
-      const apiKey = await resolveApiKey(ctx);
-      if (!apiKey) {
-        return { content: [{ type: "text", text: "No OpenRouter API key found." }], details: { error: "no_api_key" } };
-      }
-
-      const engine = params.engine || state.searchEngine;
-      onUpdate?.({ content: [{ type: "text", text: `Searching: "${params.query}"...` }], details: {} });
-
-      const toolParams: Record<string, unknown> = {};
-      if (engine && engine !== "auto") toolParams.engine = engine;
-      if (params.max_results) toolParams.max_results = params.max_results;
-      if (params.search_context_size) toolParams.search_context_size = params.search_context_size;
-      if (params.allowed_domains) toolParams.allowed_domains = params.allowed_domains;
-      if (params.excluded_domains) toolParams.excluded_domains = params.excluded_domains;
-
-      const res = await callOpenRouterTool(
-        apiKey,
-        SEARCH_SRV,
-        toolParams,
-        [{ role: "user", content: params.query }],
-        signal,
-      );
-
-      if (!res.ok) throw new Error(`OpenRouter search error (${res.status}): ${res.error}`);
-
-      const extracted = extractResponse(res.data!);
-      if (extracted.content) {
-        return { content: [{ type: "text", text: extracted.content }], details: { source: "openrouter", engine } };
-      }
-      if (extracted.toolCalls) {
-        const tr = truncateHead(extracted.toolCalls, { maxLines: DEFAULT_MAX_LINES, maxBytes: DEFAULT_MAX_BYTES });
-        return {
-          content: [{ type: "text", text: tr.content }],
-          details: { source: "tool_calls", engine, truncated: tr.truncated },
-        };
-      }
-      return { content: [{ type: "text", text: "No results." }], details: { status: "empty" } };
-    },
-  });
-
-  // ── web_fetch tool ───────────────────────────────────────────────────────
-
-  pi.registerTool({
-    name: FETCH_TOOL,
-    label: "Web Fetch",
-    description:
-      "Fetch the content of a specific URL via OpenRouter. " +
-      "Use when you need to read a web page, documentation, article, or PDF. " +
-      "Returns the page title and text content.",
-    promptGuidelines: [
-      "Use web_fetch to read the content of a specific URL when you need to analyze or summarize a known page.",
-    ],
-    parameters: Type.Object({
-      url: Type.String({ description: "URL to fetch content from" }),
-      engine: Type.Optional(
-        Type.String({ description: "Fetch engine: auto (default), native, exa, openrouter, firecrawl, parallel" }),
-      ),
-      max_content_tokens: Type.Optional(
-        Type.Integer({ description: "Max content length in approximate tokens (e.g. 50000)" }),
-      ),
-    }),
-
-    async execute(_id, params, signal, onUpdate, ctx) {
-      const apiKey = await resolveApiKey(ctx);
-      if (!apiKey) {
-        return { content: [{ type: "text", text: "No OpenRouter API key found." }], details: { error: "no_api_key" } };
-      }
-
-      const engine = params.engine || state.fetchEngine;
-      onUpdate?.({ content: [{ type: "text", text: `Fetching: ${params.url}...` }], details: {} });
-
-      const toolParams: Record<string, unknown> = {};
-      if (engine && engine !== "auto") toolParams.engine = engine;
-      if (params.max_content_tokens) toolParams.max_content_tokens = params.max_content_tokens;
-
-      const res = await callOpenRouterTool(
-        apiKey,
-        FETCH_SRV,
-        toolParams,
-        [{ role: "user", content: `Fetch and show me the content at ${params.url}` }],
-        signal,
-      );
-
-      if (!res.ok) throw new Error(`OpenRouter fetch error (${res.status}): ${res.error}`);
-
-      const extracted = extractResponse(res.data!);
-      if (extracted.content) {
-        const tr = truncateHead(extracted.content, { maxLines: DEFAULT_MAX_LINES, maxBytes: DEFAULT_MAX_BYTES });
-        return {
-          content: [{ type: "text", text: tr.content }],
-          details: { source: "openrouter", engine, url: params.url, truncated: tr.truncated },
-        };
-      }
-      if (extracted.toolCalls) {
-        const tr = truncateHead(extracted.toolCalls, { maxLines: DEFAULT_MAX_LINES, maxBytes: DEFAULT_MAX_BYTES });
-        return {
-          content: [{ type: "text", text: tr.content }],
-          details: { source: "tool_calls", engine, url: params.url, truncated: tr.truncated },
-        };
-      }
-      return {
-        content: [{ type: "text", text: "Fetch returned no content." }],
-        details: { status: "empty", url: params.url },
-      };
     },
   });
 
